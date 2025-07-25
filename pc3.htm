@@ -66,11 +66,36 @@
         const logEl = document.getElementById('log-entries'), tableBody = document.getElementById('result-table').tBodies[0], tableHead = document.getElementById('result-table').tHead, toggleSpread = document.getElementById('toggleSpread'), toggleTerm = document.getElementById('toggleTerm'), toggleRSI = document.getElementById('toggleRSI'), klineSelect = document.getElementById('kline-interval-select');
         const SYMBOL_LIMIT=1e3,EXCLUDED_PAIRS=["USDCUSDT","TUSDUSDT","FDUSDUSDT","AEURUSDT","EURUSDT","USDTBIDR","USDTBRL","USDTDAI","USDTTRY","USDTUAH","USDTZAR"],D_PER=50,R_PER=14,KLINE_FETCH_LIMIT=300,MIN_KLINE_COUNT=100;
         let sortColIdx=9,sortDir='desc',klineInt='15m',currentStates={},allData=[];
-        const F_BASE_URL='https://fapi.binance.com/fapi/v1/',B_TRADE_URL='https://www.binance.com/ru/futures/',COL_MAP={rank:0,pair:1,price:2,donchian:3,trend:4,signal:5,spread:6,term:7,rsi:8,score:9};
+        
+        // --- ИЗМЕНЕНИЕ 1: Добавлен прокси для обхода CORS ---
+        const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+        const F_BASE_URL = `${CORS_PROXY}https://fapi.binance.com/fapi/v1/`, B_TRADE_URL='https://www.binance.com/ru/futures/', COL_MAP={rank:0,pair:1,price:2,donchian:3,trend:4,signal:5,spread:6,term:7,rsi:8,score:9};
+        
         function addLog(msg,isErr=false){const entry=document.createElement('li'),ts=(new Date).toLocaleTimeString('en-US',{hour12:!1});entry.textContent=`[${ts}] ${msg}`;isErr&&(entry.style.color='red');logEl.append(entry);logEl.children.length>50&&logEl.removeChild(logEl.firstElementChild)}
         async function copyToClip(text){try{await navigator.clipboard.writeText(text+".P");addLog(`Скопировано '${text}.P' в буфер обмена.`)}catch(err){console.error('Не удалось скопировать текст: ',err);addLog(`Ошибка при копировании '${text}.P': ${err.message}`,!0)}}
-        async function fetchRanks(){addLog("Запрос рангов с CoinGecko...");try{const page1Promise=fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1');const page2Promise=fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2');const responses=await Promise.all([page1Promise,page2Promise]);for(const res of responses){if(!res.ok)throw new Error(`HTTP ${res.status}`)}
-        const data=await Promise.all(responses.map(res=>res.json()));const allCoins=data.flat();const ranksMap=new Map;allCoins.forEach(coin=>{if(coin.symbol)ranksMap.set(coin.symbol.toUpperCase(),coin.market_cap_rank)});addLog(`Ранги по капитализации получены для ${ranksMap.size} монет.`);return ranksMap}catch(err){addLog(`Ошибка при получении рангов: ${err.message}`,!0);return new Map}}
+        
+        async function fetchRanks(){
+            addLog("Запрос рангов с CoinGecko...");
+            try{
+                // --- ИЗМЕНЕНИЕ 2: Добавлен прокси для CoinGecko ---
+                const page1Promise=fetch(`${CORS_PROXY}https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1`);
+                const page2Promise=fetch(`${CORS_PROXY}https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2`);
+                const responses=await Promise.all([page1Promise,page2Promise]);
+                for(const res of responses){if(!res.ok)throw new Error(`HTTP ${res.status}`)}
+                
+                // --- ИЗМЕНЕНИЕ 3: Правильная обработка ответа от прокси ---
+                const data=await Promise.all(responses.map(async (res) => JSON.parse(await res.text())));
+                const allCoins=data.flat();
+                const ranksMap=new Map;
+                allCoins.forEach(coin=>{if(coin.symbol)ranksMap.set(coin.symbol.toUpperCase(),coin.market_cap_rank)});
+                addLog(`Ранги по капитализации получены для ${ranksMap.size} монет.`);
+                return ranksMap
+            }catch(err){
+                addLog(`Ошибка при получении рангов: ${err.message}`,!0);
+                return new Map
+            }
+        }
+
         function calcDonchian(klines,period){if(klines.length<period)return{hpc:null,lpc:null};const relKlines=klines.slice(-period);let h=-Infinity,l=Infinity;relKlines.forEach(k=>{const high=parseFloat(k[2]),low=parseFloat(k[3]);high>h&&(h=high);low<l&&(l=low)});return{hpc:h,lpc:l}}
         function calcRSI(klines,period){if(klines.length<period+1)return null;const closePrices=klines.map(k=>parseFloat(k[4]));let gains=[],losses=[];for(let i=1;i<closePrices.length;i++){const diff=closePrices[i]-closePrices[i-1];if(diff>0){gains.push(diff);losses.push(0)}else{gains.push(0);losses.push(Math.abs(diff))}}
         let avgGain=gains.slice(0,period).reduce((s,v)=>s+v,0)/period,avgLoss=losses.slice(0,period).reduce((s,v)=>s+v,0)/period;if(avgLoss===0)return 100;let rs=avgGain/avgLoss,rsi=100-(100/(1+rs));for(let i=period;i<gains.length;i++){avgGain=((avgGain*(period-1))+gains[i])/period;avgLoss=((avgLoss*(period-1))+losses[i])/period;if(avgLoss===0)rsi=100;else{rs=avgGain/avgLoss;rsi=100-(100/(1+rs))}}
@@ -81,18 +106,114 @@
         data.forEach(i=>{let score=0;toggleSpread.checked&&(score+=i.spreadScore?parseInt(i.spreadScore):0);toggleTerm.checked&&(score+=i.termScore?parseInt(i.termScore):0);toggleRSI.checked&&(score+=i.rsiScore?parseInt(i.rsiScore):0);i.totalScore=score})}
         function renderTable(data){tableBody.innerHTML='';if(data.length===0){tableBody.innerHTML=`<tr><td colspan="10" style="text-align: center;">Нет данных для отображения.</td></tr>`;return}
         data.forEach(i=>{const row=tableBody.insertRow();row.id=`row-${i.symbol}`;const rankCell=row.insertCell();rankCell.textContent=i.rank||'> 500';const pCell=row.insertCell();let base=i.symbol.replace('USDT','');base.startsWith('10')&&(base=base.replace(/^10+/,''));const pCode=document.createElement('a');pCode.className='pair-code pair-external-link';pCode.textContent=base;pCode.href=`${B_TRADE_URL}${i.symbol}`;pCode.target='_blank';pCode.title=`Открыть страницу ${i.symbol} на Binance`;pCell.append(pCode,document.createElement('br'));const pLink=document.createElement('span');pLink.className='pair-link';pLink.textContent=i.symbol;pLink.title=`Скопировать ${i.symbol}`;pLink.addEventListener('click',()=>copyToClip(i.symbol));pCell.appendChild(pLink);row.insertCell().textContent=typeof i.lastPrice==='number'?i.lastPrice.toFixed(8):'';const dCell=row.insertCell();dCell.className='donchian-values';dCell.innerHTML=`<div>H = ${i.hpc}</div><div>L = ${i.lpc}</div>`;row.insertCell().textContent=i.trend;const sCell=row.insertCell();sCell.className='signal-values';if(i.trend==='+1'&&i.hSignal!=='')sCell.textContent=`H = ${i.hSignal}`;else if(i.trend==='-1'&&i.lSignal!=='')sCell.textContent=`L = ${i.lSignal}`;else sCell.textContent='';const spCell=row.insertCell();spCell.className='spread-values';spCell.classList.toggle('hidden-col',!toggleSpread.checked);const spVal=document.createElement('div'),spScore=document.createElement('div');spVal.textContent=i.spread.startsWith('-')||i.spread===''?i.spread:`+${i.spread}`;spScore.textContent=`Score = ${i.spreadScore!==void 0?i.spreadScore:''}`;spCell.append(spVal,spScore);const tCell=row.insertCell();tCell.className='term-values';tCell.classList.toggle('hidden-col',!toggleTerm.checked);const tVal=document.createElement('div'),tScore=document.createElement('div');tVal.textContent=i.term;tScore.textContent=`Score = ${i.termScore!==void 0?i.termScore:''}`;tCell.append(tVal,tScore);const rCell=row.insertCell();rCell.className='rsi-values';rCell.classList.toggle('hidden-col',!toggleRSI.checked);const rVal=document.createElement('div'),rScore=document.createElement('div');rVal.textContent=i.rsi!==null?`${i.rsi}%`:'';rScore.textContent=`Score = ${i.rsiScore!==void 0?i.rsiScore:''}`;rCell.append(rVal,rScore);row.insertCell().textContent=i.totalScore!==void 0?i.totalScore:''})}
-        async function fetchPairs(){logEl.innerHTML='';tableBody.innerHTML=`<tr><td colspan="10" style="text-align: center;">Загрузка данных...</td></tr>`;const ranksMap=await fetchRanks();addLog("Запрос списка торговых пар...");const url=F_BASE_URL+'exchangeInfo';try{const response=await fetch(url);if(!response.ok){const errTxt=await response.text();throw new Error(`Ошибка HTTP! ${response.status}. ${errTxt}`)}
-        const data=await response.json(),pairs=data.symbols.filter(s=>s.quoteAsset==="USDT"&&s.contractType==="PERPETUAL"&&s.status==="TRADING"&&!EXCLUDED_PAIRS.includes(s.symbol)).map(s=>s.symbol).sort();addLog(`Получено ${pairs.length} пар.`);if(pairs.length===0){addLog("Нет пар для обработки.",!0);tableBody.innerHTML='<tr><td colspan="10" style="text-align: center;">Нет пар для обработки.</td></tr>';return}
-        allData=[];const pairsToFetch=pairs.slice(0,SYMBOL_LIMIT),prices=await fetchAllPrices();addLog(`Обработка ${klineInt} KLines...`);const promises=pairsToFetch.map(p=>fetchKline(p,klineInt,KLINE_FETCH_LIMIT)),klineResults=await Promise.allSettled(promises);let processedCount=0;for(let i=0;i<pairsToFetch.length;i++){const p=pairsToFetch[i],res=klineResults[i];if(res.status!=='fulfilled'||!res.value.klines||res.value.klines.length<MIN_KLINE_COUNT)continue;const klines=res.value.klines;let baseAsset=p.replace('USDT','');baseAsset.startsWith('10')&&(baseAsset=baseAsset.replace(/^10+/,''));const rank=ranksMap.get(baseAsset)||null;let hpc='',lpc='',trend=0,hSig='',lSig='',spread='',term='',rsi=null,rawSpread=null,lastPrice=prices.has(p)?prices.get(p):null;if(!currentStates[p])currentStates[p]={trend:0,hSignalPrice:'',lSignalPrice:'',lastSignalKlineIndex:-1};let histTrend=currentStates[p].trend,histHSig=currentStates[p].hSignalPrice,histLSig=currentStates[p].lSignalPrice,lastSigIdx=currentStates[p].lastSignalKlineIndex;for(let j=D_PER;j<klines.length;j++){const prevKlines=klines.slice(j-D_PER,j),dPrev=calcDonchian(prevKlines,D_PER);if(dPrev.hpc!==null&&dPrev.lpc!==null){const curKline=klines[j],curHigh=parseFloat(curKline[2]),curLow=parseFloat(curKline[3]);if(curHigh>=dPrev.hpc){if(histTrend!=='+1'){histHSig=dPrev.hpc.toFixed(8);histLSig='';lastSigIdx=j}
-        histTrend='+1'}else if(curLow<=dPrev.lpc){if(histTrend!=='-1'){histLSig=dPrev.lpc.toFixed(8);histHSig='';lastSigIdx=j}
-        histTrend='-1'}}else{histTrend=0;histHSig='';histLSig='';lastSigIdx=-1}}
-        trend=histTrend;hSig=histHSig;lSig=histLSig;const dKlines=klines.slice(klines.length-D_PER),dDisp=calcDonchian(dKlines,D_PER);hpc=dDisp.hpc!==null?dDisp.hpc.toFixed(8):'';lpc=dDisp.lpc!==null?dDisp.lpc.toFixed(8):'';lastSigIdx!==-1&&(term=(klines.length-1)-lastSigIdx);rsi=calcRSI(klines,R_PER);if(lastPrice!==null){let sigVal=null;if(trend==='+1'&&hSig!=='')sigVal=parseFloat(hSig);else if(trend==='-1'&&lSig!=='')sigVal=parseFloat(lSig);sigVal!==null&&sigVal!==0&&(rawSpread=((lastPrice-sigVal)/sigVal)*100,spread=rawSpread.toFixed(1)+'%')}
-        currentStates[p].trend=trend;currentStates[p].hSignalPrice=hSig;currentStates[p].lSignalPrice=lSig;currentStates[p].lastSignalKlineIndex=lastSigIdx;allData.push({rank,symbol:p,lastPrice,hpc,lpc,trend,hSignal:hSig,lSignal:lSig,spread,term,rawSpread,rsi,spreadScore:0,termScore:0,rsiScore:0,totalScore:0});processedCount++}
-        addLog(`Обработано ${processedCount} пар.`);applyColVisibility();addLog("Обновление завершено.")}catch(err){console.error("Ошибка в fetchPairs:",err);addLog(`Критическая ошибка: ${err.message}`,!0);tableBody.innerHTML=`<tr><td colspan="10" style="text-align: center;">Ошибка: ${err.message}</td></tr>`}}
-        async function fetchAllPrices(){addLog("Запрос цен...");const url=F_BASE_URL+'ticker/price';try{const res=await fetch(url);if(!res.ok){const errTxt=await res.text();throw new Error(`Ошибка HTTP! ${res.status}. ${errTxt}`)}
-        const data=await res.json(),priceMap=new Map;data.forEach(i=>{priceMap.set(i.symbol,parseFloat(i.price))});addLog(`Цены получены для ${priceMap.size} пар.`);return priceMap}catch(err){console.error("Ошибка при получении цен:",err);addLog(`Ошибка при получении цен: ${err.message}`,!0);return new Map}}
-        async function fetchKline(symbol,interval,limit){const url=`${F_BASE_URL}klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;try{const res=await fetch(url);if(!res.ok){const errTxt=await res.text();throw new Error(`Ошибка HTTP для ${symbol}! ${res.status}. ${errTxt}`)}
-        const data=await res.json();return data&&data.length>0?{klines:data}:{klines:[]}}catch(err){console.error(`Ошибка KLines для ${symbol}:`,err);addLog(`Ошибка KLines для ${symbol}: ${err.message}`,!0);return{klines:[]}}}
+        
+        async function fetchPairs(){
+            logEl.innerHTML='';
+            tableBody.innerHTML=`<tr><td colspan="10" style="text-align: center;">Загрузка данных...</td></tr>`;
+            const ranksMap=await fetchRanks();
+            addLog("Запрос списка торговых пар...");
+            const url=F_BASE_URL+'exchangeInfo';
+            try{
+                const response=await fetch(url);
+                if(!response.ok){const errTxt=await response.text();throw new Error(`Ошибка HTTP! ${response.status}. ${errTxt}`)}
+                
+                // --- ИЗМЕНЕНИЕ 4: Правильная обработка ответа от прокси ---
+                const text = await response.text();
+                const data = JSON.parse(text);
+                const pairs=data.symbols.filter(s=>s.quoteAsset==="USDT"&&s.contractType==="PERPETUAL"&&s.status==="TRADING"&&!EXCLUDED_PAIRS.includes(s.symbol)).map(s=>s.symbol).sort();
+                
+                addLog(`Получено ${pairs.length} пар.`);
+                if(pairs.length===0){addLog("Нет пар для обработки.",!0);tableBody.innerHTML='<tr><td colspan="10" style="text-align: center;">Нет пар для обработки.</td></tr>';return}
+                allData=[];
+                const pairsToFetch=pairs.slice(0,SYMBOL_LIMIT),prices=await fetchAllPrices();
+                addLog(`Обработка ${klineInt} KLines...`);
+                const promises=pairsToFetch.map(p=>fetchKline(p,klineInt,KLINE_FETCH_LIMIT)),klineResults=await Promise.allSettled(promises);
+                let processedCount=0;
+                for(let i=0;i<pairsToFetch.length;i++){
+                    const p=pairsToFetch[i],res=klineResults[i];
+                    if(res.status!=='fulfilled'||!res.value.klines||res.value.klines.length<MIN_KLINE_COUNT)continue;
+                    const klines=res.value.klines;
+                    let baseAsset=p.replace('USDT','');
+                    baseAsset.startsWith('10')&&(baseAsset=baseAsset.replace(/^10+/,''));
+                    const rank=ranksMap.get(baseAsset)||null;
+                    let hpc='',lpc='',trend=0,hSig='',lSig='',spread='',term='',rsi=null,rawSpread=null,lastPrice=prices.has(p)?prices.get(p):null;
+                    if(!currentStates[p])currentStates[p]={trend:0,hSignalPrice:'',lSignalPrice:'',lastSignalKlineIndex:-1};
+                    let histTrend=currentStates[p].trend,histHSig=currentStates[p].hSignalPrice,histLSig=currentStates[p].lSignalPrice,lastSigIdx=currentStates[p].lastSignalKlineIndex;
+                    for(let j=D_PER;j<klines.length;j++){
+                        const prevKlines=klines.slice(j-D_PER,j),dPrev=calcDonchian(prevKlines,D_PER);
+                        if(dPrev.hpc!==null&&dPrev.lpc!==null){
+                            const curKline=klines[j],curHigh=parseFloat(curKline[2]),curLow=parseFloat(curKline[3]);
+                            if(curHigh>=dPrev.hpc){if(histTrend!=='+1'){histHSig=dPrev.hpc.toFixed(8);histLSig='';lastSigIdx=j}
+                            histTrend='+1'}else if(curLow<=dPrev.lpc){if(histTrend!=='-1'){histLSig=dPrev.lpc.toFixed(8);histHSig='';lastSigIdx=j}
+                            histTrend='-1'}
+                        }else{
+                            histTrend=0;histHSig='';histLSig='';lastSigIdx=-1
+                        }
+                    }
+                    trend=histTrend;hSig=histHSig;lSig=histLSig;
+                    const dKlines=klines.slice(klines.length-D_PER),dDisp=calcDonchian(dKlines,D_PER);
+                    hpc=dDisp.hpc!==null?dDisp.hpc.toFixed(8):'';lpc=dDisp.lpc!==null?dDisp.lpc.toFixed(8):'';
+                    lastSigIdx!==-1&&(term=(klines.length-1)-lastSigIdx);
+                    rsi=calcRSI(klines,R_PER);
+                    if(lastPrice!==null){
+                        let sigVal=null;
+                        if(trend==='+1'&&hSig!=='')sigVal=parseFloat(hSig);
+                        else if(trend==='-1'&&lSig!=='')sigVal=parseFloat(lSig);
+                        sigVal!==null&&sigVal!==0&&(rawSpread=((lastPrice-sigVal)/sigVal)*100,spread=rawSpread.toFixed(1)+'%')
+                    }
+                    currentStates[p].trend=trend;currentStates[p].hSignalPrice=hSig;currentStates[p].lSignalPrice=lSig;currentStates[p].lastSignalKlineIndex=lastSigIdx;
+                    allData.push({rank,symbol:p,lastPrice,hpc,lpc,trend,hSignal:hSig,lSignal:lSig,spread,term,rawSpread,rsi,spreadScore:0,termScore:0,rsiScore:0,totalScore:0});
+                    processedCount++
+                }
+                addLog(`Обработано ${processedCount} пар.`);
+                applyColVisibility();
+                addLog("Обновление завершено.")
+            }catch(err){
+                console.error("Ошибка в fetchPairs:",err);
+                addLog(`Критическая ошибка: ${err.message}`,!0);
+                tableBody.innerHTML=`<tr><td colspan="10" style="text-align: center;">Ошибка: ${err.message}</td></tr>`
+            }
+        }
+        
+        async function fetchAllPrices(){
+            addLog("Запрос цен...");
+            const url=F_BASE_URL+'ticker/price';
+            try{
+                const res=await fetch(url);
+                if(!res.ok){const errTxt=await res.text();throw new Error(`Ошибка HTTP! ${res.status}. ${errTxt}`)}
+                
+                // --- ИЗМЕНЕНИЕ 5: Правильная обработка ответа от прокси ---
+                const text = await res.text();
+                const data = JSON.parse(text);
+                const priceMap=new Map;
+                data.forEach(i=>{priceMap.set(i.symbol,parseFloat(i.price))});
+                addLog(`Цены получены для ${priceMap.size} пар.`);
+                return priceMap
+            }catch(err){
+                console.error("Ошибка при получении цен:",err);
+                addLog(`Ошибка при получении цен: ${err.message}`,!0);
+                return new Map
+            }
+        }
+        
+        async function fetchKline(symbol,interval,limit){
+            const url=`${F_BASE_URL}klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+            try{
+                const res=await fetch(url);
+                if(!res.ok){const errTxt=await res.text();throw new Error(`Ошибка HTTP для ${symbol}! ${res.status}. ${errTxt}`)}
+                
+                // --- ИЗМЕНЕНИЕ 6: Правильная обработка ответа от прокси ---
+                const text = await res.text();
+                if (!text) return { klines: [] }; // Добавлена проверка на пустой ответ
+                const data = JSON.parse(text);
+                return data&&data.length>0?{klines:data}:{klines:[]}
+            }catch(err){
+                console.error(`Ошибка KLines для ${symbol}:`,err);
+                addLog(`Ошибка KLines для ${symbol}: ${err.message}`,!0);
+                return{klines:[]}
+            }
+        }
+
         function handleHeaderClick(idx){const visHdrs=Array.from(tableHead.querySelectorAll('th:not(.hidden-col)'));if(!visHdrs[idx])return;const colId=visHdrs[idx].textContent.trim().toLowerCase().split(' ')[0];const key=Object.keys(COL_MAP).find(k=>k===colId);if(key===void 0)return;const origIdx=COL_MAP[key];if(origIdx===sortColIdx)sortDir=sortDir==='asc'?'desc':'asc';else{sortColIdx=origIdx;sortDir=(origIdx===COL_MAP.rank||origIdx===COL_MAP.pair||origIdx===COL_MAP.trend)?'asc':'desc'}
         sortAndRender()}
         function sortData(data,col,dir){const S=(a,b)=>{if(a===null||a===void 0)return 1;if(b===null||b===void 0)return-1;return a<b?-1:a>b?1:0};data.sort((a,b)=>{let comp=0;switch(col){case COL_MAP.rank:comp=S(a.rank,b.rank);break;case COL_MAP.pair:comp=a.symbol.localeCompare(b.symbol);break;case COL_MAP.price:comp=S(a.lastPrice,b.lastPrice);break;case COL_MAP.donchian:comp=S(a.hpc,b.hpc)||S(a.lpc,b.lpc);break;case COL_MAP.trend:comp=S(a.trend,b.trend);break;case COL_MAP.signal:const sigA=a.trend==='+1'?a.hSignal:a.lSignal,sigB=b.trend==='+1'?b.hSignal:b.lSignal;comp=S(parseFloat(sigA),parseFloat(sigB));break;case COL_MAP.spread:comp=S(a.spreadScore,b.spreadScore);break;case COL_MAP.term:comp=S(a.termScore,b.termScore);break;case COL_MAP.rsi:comp=S(a.rsiScore,b.rsiScore);break;case COL_MAP.score:comp=S(a.totalScore,b.totalScore);break}
