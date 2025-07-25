@@ -67,8 +67,8 @@
         const SYMBOL_LIMIT=1e3,EXCLUDED_PAIRS=["USDCUSDT","TUSDUSDT","FDUSDUSDT","AEURUSDT","EURUSDT","USDTBIDR","USDTBRL","USDTDAI","USDTTRY","USDTUAH","USDTZAR"],D_PER=50,R_PER=14,KLINE_FETCH_LIMIT=300,MIN_KLINE_COUNT=100;
         let sortColIdx=9,sortDir='desc',klineInt='15m',currentStates={},allData=[];
         
-        // --- ИЗМЕНЕНИЕ 1: Добавлен прокси для обхода CORS ---
-        const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+        // --- ИЗМЕНЕНИЕ: Замена CORS прокси на более надежный ---
+        const CORS_PROXY = 'https://corsproxy.io/?';
         const F_BASE_URL = `${CORS_PROXY}https://fapi.binance.com/fapi/v1/`, B_TRADE_URL='https://www.binance.com/ru/futures/', COL_MAP={rank:0,pair:1,price:2,donchian:3,trend:4,signal:5,spread:6,term:7,rsi:8,score:9};
         
         function addLog(msg,isErr=false){const entry=document.createElement('li'),ts=(new Date).toLocaleTimeString('en-US',{hour12:!1});entry.textContent=`[${ts}] ${msg}`;isErr&&(entry.style.color='red');logEl.append(entry);logEl.children.length>50&&logEl.removeChild(logEl.firstElementChild)}
@@ -77,13 +77,11 @@
         async function fetchRanks(){
             addLog("Запрос рангов с CoinGecko...");
             try{
-                // --- ИЗМЕНЕНИЕ 2: Добавлен прокси для CoinGecko ---
                 const page1Promise=fetch(`${CORS_PROXY}https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1`);
                 const page2Promise=fetch(`${CORS_PROXY}https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=2`);
                 const responses=await Promise.all([page1Promise,page2Promise]);
                 for(const res of responses){if(!res.ok)throw new Error(`HTTP ${res.status}`)}
                 
-                // --- ИЗМЕНЕНИЕ 3: Правильная обработка ответа от прокси ---
                 const data=await Promise.all(responses.map(async (res) => JSON.parse(await res.text())));
                 const allCoins=data.flat();
                 const ranksMap=new Map;
@@ -117,7 +115,6 @@
                 const response=await fetch(url);
                 if(!response.ok){const errTxt=await response.text();throw new Error(`Ошибка HTTP! ${response.status}. ${errTxt}`)}
                 
-                // --- ИЗМЕНЕНИЕ 4: Правильная обработка ответа от прокси ---
                 const text = await response.text();
                 const data = JSON.parse(text);
                 const pairs=data.symbols.filter(s=>s.quoteAsset==="USDT"&&s.contractType==="PERPETUAL"&&s.status==="TRADING"&&!EXCLUDED_PAIRS.includes(s.symbol)).map(s=>s.symbol).sort();
@@ -182,7 +179,6 @@
                 const res=await fetch(url);
                 if(!res.ok){const errTxt=await res.text();throw new Error(`Ошибка HTTP! ${res.status}. ${errTxt}`)}
                 
-                // --- ИЗМЕНЕНИЕ 5: Правильная обработка ответа от прокси ---
                 const text = await res.text();
                 const data = JSON.parse(text);
                 const priceMap=new Map;
@@ -202,9 +198,8 @@
                 const res=await fetch(url);
                 if(!res.ok){const errTxt=await res.text();throw new Error(`Ошибка HTTP для ${symbol}! ${res.status}. ${errTxt}`)}
                 
-                // --- ИЗМЕНЕНИЕ 6: Правильная обработка ответа от прокси ---
                 const text = await res.text();
-                if (!text) return { klines: [] }; // Добавлена проверка на пустой ответ
+                if (!text) return { klines: [] };
                 const data = JSON.parse(text);
                 return data&&data.length>0?{klines:data}:{klines:[]}
             }catch(err){
